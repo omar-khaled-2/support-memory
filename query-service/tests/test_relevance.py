@@ -1,6 +1,11 @@
 import pytest
 
-from app.services.relevance import _cosine_similarity, select_relevant_beliefs
+from app.services.relevance import (
+    _cosine_similarity,
+    _keyword_score,
+    _rrf_score,
+    select_relevant_beliefs,
+)
 
 
 class _FakeEmbedding:
@@ -78,3 +83,13 @@ def test_cosine_similarity():
 
     zero = [0.0, 0.0]
     assert _cosine_similarity(a, zero) == 0.0
+
+
+def test_keyword_score():
+    assert _keyword_score("What is the plan?", "plan: Enterprise") > 0
+    assert _keyword_score("random unrelated", "plan: Enterprise") == 0.0
+
+
+def test_rrf_score():
+    assert _rrf_score([1, 1]) == pytest.approx(2 / 61)
+    assert _rrf_score([1, 2]) == pytest.approx(1 / 61 + 1 / 62)
