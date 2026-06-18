@@ -1,0 +1,2 @@
+CREATE DATABASE ingest;
+CREATE DATABASE memory;
