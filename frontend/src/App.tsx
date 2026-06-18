@@ -5,6 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
 import { MessageSquare, Send, AlertCircle } from "lucide-react"
+import Markdown from "react-markdown"
 
 interface QueryResponse {
   answer?: string
@@ -158,7 +159,7 @@ function App() {
               ) : (
                 <>
                   <div className="prose prose-sm max-w-none text-foreground">
-                    <p className="whitespace-pre-line">{result.answer}</p>
+                    <Markdown>{result.answer || ""}</Markdown>
                   </div>
                   {result.fallback && (
                     <p className="text-xs text-muted-foreground">
