@@ -6,6 +6,7 @@ from app.controllers.memory_controller import (
     _extract_facts_from_payload,
     _reliability_to_confidence,
     _source_weight,
+    build_digest,
     build_snapshot,
     detect_ambiguous_identities,
     get_beliefs,
@@ -334,3 +335,53 @@ async def test_sensitive_attributes_constant_covers_expected_values():
     assert "sla" in SENSITIVE_ATTRIBUTES
     assert "entitlement" in SENSITIVE_ATTRIBUTES
     assert "internal_notes" in SENSITIVE_ATTRIBUTES
+
+
+@pytest.mark.asyncio
+async def test_build_digest_no_snapshots(db_session):
+    digest = await build_digest(db_session, "acct_no_snapshots")
+    assert digest["entity_id"] == "acct_no_snapshots"
+    assert digest["current_snapshot_id"] is None
+    assert digest["changes"] == []
+    assert digest["added"] == []
+    assert digest["removed"] == []
+
+
+@pytest.mark.asyncio
+async def test_build_digest_detects_changes_and_added_facts(db_session):
+    event1 = EventIn(
+        event_id="evt-digest-1",
+        entity_type="account",
+        entity_id="acct_digest",
+        payload={"plan": "Starter", "region": "Cairo"},
+        reliability="high",
+        source="crm",
+    )
+    await process_event(db_session, event1)
+
+    event2 = EventIn(
+        event_id="evt-digest-2",
+        entity_type="account",
+        entity_id="acct_digest",
+        payload={"plan": "Enterprise", "seats": 42},
+        reliability="high",
+        source="billing",
+    )
+    await process_event(db_session, event2)
+
+    digest = await build_digest(db_session, "acct_digest")
+    assert digest["current_snapshot_id"] is not None
+    assert digest["previous_snapshot_id"] is not None
+
+    changes = {c["attribute"]: c for c in digest["changes"]}
+    assert "plan" in changes
+    assert changes["plan"]["old_value"] == "Starter"
+    assert changes["plan"]["new_value"] == "Enterprise"
+
+    added = {a["attribute"]: a for a in digest["added"]}
+    assert "seats" in added
+    assert added["seats"]["new_value"] == "42"
+
+    removed = {r["attribute"]: r for r in digest["removed"]}
+    assert "region" not in removed
+    assert "plan" not in removed

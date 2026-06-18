@@ -5,7 +5,48 @@ from app.services.memory_client import (
     fetch_active_facts,
     fetch_beliefs,
     fetch_briefing,
+    fetch_digest,
 )
+
+
+def _is_digest_question(question: str) -> bool:
+    lowered = question.lower()
+    return any(
+        token in lowered
+        for token in [
+            "what changed",
+            "changed since",
+            "since the last",
+            "since last",
+            "digest",
+            "diff",
+        ]
+    )
+
+
+def _format_digest(digest: Dict[str, Any]) -> str:
+    lines = []
+    if digest.get("changes"):
+        lines.append("Changed:")
+        for change in digest["changes"]:
+            lines.append(
+                f"- {change['attribute']}: {change.get('old_value')} → {change.get('new_value')}"
+            )
+    if digest.get("added"):
+        lines.append("Added:")
+        for added in digest["added"]:
+            lines.append(f"- {added['attribute']}: {added.get('new_value')}")
+    if digest.get("removed"):
+        lines.append("Removed:")
+        for removed in digest["removed"]:
+            lines.append(f"- {removed['attribute']}: {removed.get('old_value')}")
+    if digest.get("new_conflicts"):
+        lines.append("New conflicts:")
+        for conflict in digest["new_conflicts"]:
+            lines.append(f"- {conflict['description']}")
+    if not lines:
+        return "No changes since the previous context build."
+    return "\n".join(lines)
 
 
 async def answer_question(
@@ -21,6 +62,15 @@ async def answer_question(
                 "Please provide an explicit entity_id."
             ),
             "context": {},
+        }
+
+    if _is_digest_question(question):
+        digest = await fetch_digest(resolved_id)
+        return {
+            "question": question,
+            "entity_id": resolved_id,
+            "answer": _format_digest(digest),
+            "context": {"digest": digest},
         }
 
     briefing = await fetch_briefing(resolved_id)

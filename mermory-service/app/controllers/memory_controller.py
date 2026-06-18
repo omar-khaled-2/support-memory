@@ -388,3 +388,118 @@ async def get_pre_call_briefing(db: AsyncSession, entity_id: str) -> Dict[str, A
         "beliefs": beliefs,
         "snapshot_id": latest_snapshot.snapshot_id if latest_snapshot else None,
     }
+
+
+async def build_digest(
+    db: AsyncSession, entity_id: str, since_snapshot_id: Optional[str] = None
+) -> Dict[str, Any]:
+    snapshots = await get_snapshots(db, entity_id)
+    if not snapshots:
+        return {
+            "entity_id": entity_id,
+            "current_snapshot_id": None,
+            "previous_snapshot_id": None,
+            "previous_generated_at": None,
+            "changes": [],
+            "added": [],
+            "removed": [],
+            "new_conflicts": [],
+        }
+
+    def _snapshot_generated_at(snap: Snapshot) -> str:
+        try:
+            return json.loads(snap.context_json).get("generated_at", "")
+        except Exception:
+            return ""
+
+    snapshots = sorted(
+        snapshots,
+        key=lambda s: _snapshot_generated_at(s),
+        reverse=True,
+    )
+
+    current_snapshot = snapshots[0]
+    previous_snapshot = None
+    if since_snapshot_id:
+        for snap in snapshots:
+            if snap.snapshot_id == since_snapshot_id:
+                previous_snapshot = snap
+                break
+    if not previous_snapshot and len(snapshots) > 1:
+        previous_snapshot = snapshots[1]
+
+    current_context = json.loads(current_snapshot.context_json)
+    current_beliefs = current_context.get("beliefs", {})
+
+    previous_beliefs: Dict[str, Any] = {}
+    previous_generated_at: Optional[str] = None
+    if previous_snapshot:
+        previous_context = json.loads(previous_snapshot.context_json)
+        previous_beliefs = previous_context.get("beliefs", {})
+        previous_generated_at = previous_context.get("generated_at")
+
+    changes: List[Dict[str, Any]] = []
+    added: List[Dict[str, Any]] = []
+    removed: List[Dict[str, Any]] = []
+
+    current_attrs = set(current_beliefs.keys())
+    previous_attrs = set(previous_beliefs.keys())
+
+    for attr in current_attrs & previous_attrs:
+        old_value = str(previous_beliefs[attr].get("value"))
+        new_value = str(current_beliefs[attr].get("value"))
+        if old_value != new_value:
+            changes.append(
+                {
+                    "attribute": attr,
+                    "old_value": old_value,
+                    "new_value": new_value,
+                    "source": current_beliefs[attr].get("source"),
+                }
+            )
+
+    for attr in current_attrs - previous_attrs:
+        added.append(
+            {
+                "attribute": attr,
+                "old_value": None,
+                "new_value": str(current_beliefs[attr].get("value")),
+                "source": current_beliefs[attr].get("source"),
+            }
+        )
+
+    for attr in previous_attrs - current_attrs:
+        removed.append(
+            {
+                "attribute": attr,
+                "old_value": str(previous_beliefs[attr].get("value")),
+                "new_value": None,
+                "source": previous_beliefs[attr].get("source"),
+            }
+        )
+
+    new_conflicts: List[Conflict] = []
+    if previous_snapshot:
+        all_conflicts = await get_conflicts(db, entity_id)
+        new_conflicts = [
+            c for c in all_conflicts if c.created_at > previous_snapshot.created_at
+        ]
+
+    return {
+        "entity_id": entity_id,
+        "current_snapshot_id": current_snapshot.snapshot_id,
+        "previous_snapshot_id": previous_snapshot.snapshot_id if previous_snapshot else None,
+        "previous_generated_at": previous_generated_at,
+        "changes": changes,
+        "added": added,
+        "removed": removed,
+        "new_conflicts": [
+            {
+                "conflict_id": c.conflict_id,
+                "attribute": c.attribute,
+                "description": c.description,
+                "created_at": c.created_at.isoformat(),
+            }
+            for c in new_conflicts
+        ],
+    }

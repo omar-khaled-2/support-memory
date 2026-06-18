@@ -49,6 +49,17 @@ def _patch_controller_deps(monkeypatch):
     async def fake_llm(question, context):
         return "Helios is on the Enterprise plan in Berlin."
 
+    async def fake_digest(entity_id, since_snapshot_id=None):
+        return {
+            "entity_id": entity_id,
+            "changes": [
+                {"attribute": "plan", "old_value": "Starter", "new_value": "Enterprise"}
+            ],
+            "added": [],
+            "removed": [],
+            "new_conflicts": [],
+        }
+
     monkeypatch.setattr(
         "app.controllers.query_controller.fetch_active_facts", fake_facts
     )
@@ -57,6 +68,8 @@ def _patch_controller_deps(monkeypatch):
     )
     monkeypatch.setattr("app.controllers.query_controller.fetch_beliefs", fake_beliefs)
     monkeypatch.setattr("app.controllers.query_controller.generate_answer", fake_llm)
+    monkeypatch.setattr("app.controllers.query_controller.fetch_digest", fake_digest)
+    monkeypatch.setattr("app.views.query_views.fetch_digest", fake_digest)
 
 
 @pytest.mark.asyncio
@@ -103,3 +116,27 @@ async def test_query_returns_error_when_entity_unknown(client, monkeypatch):
     data = response.json()
     assert data["entity_id"] is None
     assert "Please provide an explicit entity_id" in data["answer"]
+
+
+@pytest.mark.asyncio
+async def test_digest_endpoint_returns_diff(client):
+    response = await client.get("/api/v1/entities/acct_api_9/digest")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["entity_id"] == "acct_api_9"
+    assert len(data["changes"]) == 1
+    assert data["changes"][0]["attribute"] == "plan"
+
+
+@pytest.mark.asyncio
+async def test_query_detects_digest_intent(client):
+    response = await client.post(
+        "/api/v1/query",
+        json={"question": "What changed since the last context build for Helios?"},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["entity_id"] == "acct_api_9"
+    assert "Starter" in data["answer"]
+    assert "Enterprise" in data["answer"]
+    assert "digest" in data["context"]

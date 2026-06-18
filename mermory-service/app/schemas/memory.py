@@ -70,8 +70,26 @@ class BeliefOut(BaseModel):
     beliefs: Dict[str, Any]
     snapshot_id: Optional[str] = None
     ambiguous_identities: List[Dict[str, Any]] = Field(default_factory=list)
-    recent_conflicts: List[Any] = Field(default_factory=list)
+    recent_conflicts: List[Dict[str, Any]] = Field(default_factory=list)
     warnings: List[str] = Field(default_factory=list)
+
+
+class DigestChange(BaseModel):
+    attribute: str
+    old_value: Optional[str] = None
+    new_value: Optional[str] = None
+    source: Optional[str] = None
+
+
+class DigestOut(BaseModel):
+    entity_id: str
+    current_snapshot_id: Optional[str] = None
+    previous_snapshot_id: Optional[str] = None
+    previous_generated_at: Optional[str] = None
+    changes: List[DigestChange] = Field(default_factory=list)
+    added: List[DigestChange] = Field(default_factory=list)
+    removed: List[DigestChange] = Field(default_factory=list)
+    new_conflicts: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class ProcessResult(BaseModel):

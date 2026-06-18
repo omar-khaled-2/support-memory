@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.controllers.memory_controller import (
+    build_digest,
     build_snapshot,
     detect_ambiguous_identities,
     get_beliefs,
@@ -17,6 +18,7 @@ from app.db import get_db
 from app.schemas.memory import (
     BeliefOut,
     ConflictOut,
+    DigestOut,
     EventIn,
     FactOut,
     PreCallBriefingOut,
@@ -51,6 +53,9 @@ async def read_beliefs(entity_id: str, db: AsyncSession = Depends(get_db)):
         if any(e["entity_id"] == entity_id for e in a["entities"])
     ]
     conflicts = await get_conflicts(db, entity_id)
+    conflict_outs = [
+        ConflictOut.model_validate(c).model_dump() for c in conflicts
+    ]
     warnings = list(beliefs.get("warnings", []))
     if entity_ambiguities:
         warnings.append(
@@ -61,7 +66,7 @@ async def read_beliefs(entity_id: str, db: AsyncSession = Depends(get_db)):
         entity_type=beliefs["entity_type"],
         beliefs=beliefs["beliefs"],
         ambiguous_identities=entity_ambiguities,
-        recent_conflicts=conflicts,
+        recent_conflicts=conflict_outs,
         warnings=warnings,
     )
 
@@ -74,6 +79,16 @@ async def create_snapshot(entity_id: str, db: AsyncSession = Depends(get_db)):
 @router.get("/entities/{entity_id}/snapshots", response_model=List[SnapshotOut])
 async def read_snapshots(entity_id: str, db: AsyncSession = Depends(get_db)):
     return await get_snapshots(db, entity_id)
+
+
+@router.get("/entities/{entity_id}/digest", response_model=DigestOut)
+async def read_digest(
+    entity_id: str,
+    since_snapshot_id: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+):
+    digest = await build_digest(db, entity_id, since_snapshot_id)
+    return DigestOut(**digest)
 
 
 @router.get("/facts", response_model=List[FactOut])

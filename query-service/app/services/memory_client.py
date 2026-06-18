@@ -1,4 +1,4 @@
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import httpx
 
@@ -30,6 +30,22 @@ async def fetch_beliefs(entity_id: str) -> Dict[str, Any]:
     async with httpx.AsyncClient(timeout=10.0) as client:
         response = await client.get(
             f"{settings.memory_service_url}/entities/{entity_id}/beliefs"
+        )
+        response.raise_for_status()
+        return response.json()
+
+
+async def fetch_digest(
+    entity_id: str, since_snapshot_id: Optional[str] = None
+) -> Dict[str, Any]:
+    settings = get_settings()
+    params = {}
+    if since_snapshot_id:
+        params["since_snapshot_id"] = since_snapshot_id
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        response = await client.get(
+            f"{settings.memory_service_url}/entities/{entity_id}/digest",
+            params=params,
         )
         response.raise_for_status()
         return response.json()
