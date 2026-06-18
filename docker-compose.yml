@@ -64,5 +64,22 @@ services:
       rabbitmq:
         condition: service_healthy
 
+  query:
+    build: ./query-service
+    ports:
+      - "8002:8002"
+    env_file:
+      - .env
+    environment:
+      APP_HOST: 0.0.0.0
+      APP_PORT: 8002
+      MEMORY_SERVICE_URL: http://memory:8001/api/v1
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.4-nano}
+      OPENAI_TEMPERATURE: ${OPENAI_TEMPERATURE:-0.0}
+    depends_on:
+      memory:
+        condition: service_started
+
 volumes:
   postgres_data:
