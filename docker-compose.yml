@@ -80,6 +80,13 @@ services:
       memory:
         condition: service_started
 
+  frontend:
+    build: ./frontend
+    expose:
+      - "80"
+    depends_on:
+      - query
+
   nginx:
     image: nginx:1.27-alpine
     ports:
@@ -90,6 +97,7 @@ services:
       - ingest
       - memory
       - query
+      - frontend
 
 volumes:
   postgres_data:
