@@ -39,37 +39,12 @@ async def test_generate_answer_with_openai(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_generate_answer_fallback_without_key(monkeypatch):
+async def test_generate_answer_raises_without_key(monkeypatch):
     monkeypatch.setattr(
         "app.services.llm_client.get_settings",
         lambda: Settings(openai_api_key=""),
     )
 
-    context = {
-        "briefing": {
-            "account_name": "Helios",
-            "active_plan": "Enterprise",
-            "region": "Berlin",
-            "tier": "Platinum",
-            "warnings": ["Shared identity"],
-        },
-        "beliefs": {"plan": "Enterprise"},
-        "warnings": ["Low confidence"],
-    }
-    answer = await generate_answer("What should I know?", context)
-    assert "Helios" in answer
-    assert "Enterprise" in answer
-    assert "Berlin" in answer
-    assert "Shared identity" in answer
-    assert "Low confidence" in answer
+    with pytest.raises(RuntimeError, match="OPENAI_API_KEY"):
+        await generate_answer("What should I know?", {})
 
-
-@pytest.mark.asyncio
-async def test_generate_answer_fallback_empty_context(monkeypatch):
-    monkeypatch.setattr(
-        "app.services.llm_client.get_settings",
-        lambda: Settings(openai_api_key=""),
-    )
-
-    answer = await generate_answer("What should I know?", {})
-    assert answer == "No relevant context found."

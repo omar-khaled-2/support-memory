@@ -60,6 +60,9 @@ def _patch_controller_deps(monkeypatch):
             "new_conflicts": [],
         }
 
+    async def fake_select_relevant(question, beliefs, top_k=10):
+        return list(beliefs.items())[:top_k]
+
     monkeypatch.setattr(
         "app.controllers.query_controller.fetch_active_facts", fake_facts
     )
@@ -69,6 +72,9 @@ def _patch_controller_deps(monkeypatch):
     monkeypatch.setattr("app.controllers.query_controller.fetch_beliefs", fake_beliefs)
     monkeypatch.setattr("app.controllers.query_controller.generate_answer", fake_llm)
     monkeypatch.setattr("app.controllers.query_controller.fetch_digest", fake_digest)
+    monkeypatch.setattr(
+        "app.controllers.query_controller.select_relevant_beliefs", fake_select_relevant
+    )
     monkeypatch.setattr("app.views.query_views.fetch_digest", fake_digest)
 
 

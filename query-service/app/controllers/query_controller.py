@@ -7,6 +7,7 @@ from app.services.memory_client import (
     fetch_briefing,
     fetch_digest,
 )
+from app.services.relevance import select_relevant_beliefs
 
 
 def _is_digest_question(question: str) -> bool:
@@ -74,11 +75,13 @@ async def answer_question(
         }
 
     briefing = await fetch_briefing(resolved_id)
-    beliefs = await fetch_beliefs(resolved_id)
+    beliefs_response = await fetch_beliefs(resolved_id)
+    all_beliefs = beliefs_response.get("beliefs", {})
+    relevant_beliefs = await select_relevant_beliefs(question, all_beliefs)
     context = {
         "briefing": briefing,
-        "beliefs": beliefs.get("beliefs", {}),
-        "warnings": beliefs.get("warnings", []),
+        "beliefs": dict(relevant_beliefs),
+        "warnings": beliefs_response.get("warnings", []),
     }
     answer = await generate_answer(question, context)
     return {
