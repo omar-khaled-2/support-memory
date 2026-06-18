@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import DateTime, Float, String, Text, func
@@ -16,6 +16,7 @@ class Fact(Base):
     attribute: Mapped[str] = mapped_column(String, nullable=False, index=True)
     value: Mapped[str] = mapped_column(Text, nullable=False)
     source_event_id: Mapped[str] = mapped_column(String, nullable=False)
+    source: Mapped[str] = mapped_column(String, nullable=False, default="unknown")
     confidence: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
     status: Mapped[str] = mapped_column(String, nullable=False, default="active")
     created_at: Mapped[datetime] = mapped_column(

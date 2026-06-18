@@ -35,7 +35,11 @@ class EventConsumer:
         self._ready = False
 
     async def is_ready(self) -> bool:
-        return self._ready and self.connection is not None and not self.connection.is_closed
+        return (
+            self._ready
+            and self.connection is not None
+            and not self.connection.is_closed
+        )
 
     async def handle_message(self, message: aio_pika.IncomingMessage):
         async with message.process():
@@ -45,6 +49,7 @@ class EventConsumer:
                     event_id=body.get("event_id", "unknown"),
                     entity_type=body.get("entity_type", "unknown"),
                     entity_id=body.get("entity_id", "unknown"),
+                    source=body.get("source", "unknown"),
                     payload=body.get("payload", {}),
                     reliability=body.get("reliability", "medium"),
                     text=body.get("text", ""),

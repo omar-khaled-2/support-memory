@@ -1,6 +1,6 @@
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.controllers.memory_controller import (
@@ -9,6 +9,7 @@ from app.controllers.memory_controller import (
     get_beliefs,
     get_conflicts,
     get_facts,
+    get_pre_call_briefing,
     get_snapshots,
     process_events,
 )
@@ -18,6 +19,7 @@ from app.schemas.memory import (
     ConflictOut,
     EventIn,
     FactOut,
+    PreCallBriefingOut,
     ProcessResult,
     SnapshotOut,
 )
@@ -33,13 +35,34 @@ async def process_events_endpoint(
     return await process_events(db, events)
 
 
+@router.get("/entities/{entity_id}/briefing", response_model=PreCallBriefingOut)
+async def read_briefing(entity_id: str, db: AsyncSession = Depends(get_db)):
+    briefing = await get_pre_call_briefing(db, entity_id)
+    return PreCallBriefingOut(**briefing)
+
+
 @router.get("/entities/{entity_id}/beliefs", response_model=BeliefOut)
 async def read_beliefs(entity_id: str, db: AsyncSession = Depends(get_db)):
     beliefs = await get_beliefs(db, entity_id)
+    ambiguities = await detect_ambiguous_identities(db)
+    entity_ambiguities = [
+        a
+        for a in ambiguities
+        if any(e["entity_id"] == entity_id for e in a["entities"])
+    ]
+    conflicts = await get_conflicts(db, entity_id)
+    warnings = list(beliefs.get("warnings", []))
+    if entity_ambiguities:
+        warnings.append(
+            "Identity attribute shared with other entities; do not auto-merge."
+        )
     return BeliefOut(
         entity_id=beliefs["entity_id"],
         entity_type=beliefs["entity_type"],
         beliefs=beliefs["beliefs"],
+        ambiguous_identities=entity_ambiguities,
+        recent_conflicts=conflicts,
+        warnings=warnings,
     )
 
 

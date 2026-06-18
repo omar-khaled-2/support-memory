@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import get_settings
 from app.db import generate_conflict_id, generate_fact_id, generate_snapshot_id
 from app.models.memory import Conflict, Fact, Snapshot
 from app.schemas.memory import EventIn, ProcessResult
@@ -13,9 +14,30 @@ from app.services.extractor import get_extractor
 
 IDENTITY_ATTRIBUTES = {"email", "phone", "external_id", "customer_id", "user_id"}
 
+# Attributes that should never be returned without explicit entity scoping.
+SENSITIVE_ATTRIBUTES = {
+    "sla",
+    "entitlement",
+    "entitlements",
+    "internal_notes",
+    "discount_rate",
+    "payment_terms",
+    "contract_value",
+    "private_note",
+}
+
 
 def _reliability_to_confidence(reliability: str) -> float:
     return {"high": 1.0, "medium": 0.75, "low": 0.5}.get(reliability, 0.75)
+
+
+def _source_weight(source: str) -> int:
+    return get_settings().source_weight_map.get(source.strip().lower(), 0)
+
+
+def _score_fact(fact: Fact) -> float:
+    source_weight = _source_weight(fact.source)
+    return fact.confidence + source_weight
 
 
 def _extract_facts_from_payload(event: EventIn) -> List[Dict[str, Any]]:
@@ -86,6 +108,7 @@ async def _record_conflict(
     attribute: str,
     old_value: str,
     new_value: str,
+    winner: str,
 ) -> Conflict:
     conflict = Conflict(
         conflict_id=generate_conflict_id(),
@@ -94,7 +117,7 @@ async def _record_conflict(
         attribute=attribute,
         description=(
             f"Contradiction for {entity_type}/{entity_id}::{attribute}: "
-            f"'{old_value}' vs '{new_value}'"
+            f"'{old_value}' vs '{new_value}' (winner: {winner})"
         ),
     )
     db.add(conflict)
@@ -106,6 +129,8 @@ async def process_event(db: AsyncSession, event: EventIn) -> ProcessResult:
     confidence = _reliability_to_confidence(event.reliability)
     conflict_count = 0
 
+    incoming_weight = _source_weight(event.source)
+
     for fact_data in facts:
         existing = await _find_active_fact(
             db,
@@ -115,16 +140,34 @@ async def process_event(db: AsyncSession, event: EventIn) -> ProcessResult:
         )
 
         if existing and existing.value != fact_data["value"]:
-            await _record_conflict(
-                db,
-                existing.entity_type,
-                existing.entity_id,
-                existing.attribute,
-                existing.value,
-                fact_data["value"],
-            )
-            await _mark_superseded(db, existing)
-            conflict_count += 1
+            existing_score = _score_fact(existing)
+            incoming_score = confidence + incoming_weight
+
+            if incoming_score > existing_score:
+                winner = f"{event.source} (higher authority)"
+                await _record_conflict(
+                    db,
+                    existing.entity_type,
+                    existing.entity_id,
+                    existing.attribute,
+                    existing.value,
+                    fact_data["value"],
+                    winner,
+                )
+                await _mark_superseded(db, existing)
+            else:
+                winner = f"{existing.source} (retained, higher or equal authority)"
+                await _record_conflict(
+                    db,
+                    existing.entity_type,
+                    existing.entity_id,
+                    existing.attribute,
+                    existing.value,
+                    fact_data["value"],
+                    winner,
+                )
+                conflict_count += 1
+                continue
 
         fact = Fact(
             fact_id=generate_fact_id(),
@@ -133,6 +176,7 @@ async def process_event(db: AsyncSession, event: EventIn) -> ProcessResult:
             attribute=fact_data["attribute"],
             value=fact_data["value"],
             source_event_id=event.event_id,
+            source=event.source,
             confidence=confidence,
             status="active",
         )
@@ -153,7 +197,9 @@ async def process_event(db: AsyncSession, event: EventIn) -> ProcessResult:
     )
 
 
-async def process_events(db: AsyncSession, events: List[EventIn]) -> List[ProcessResult]:
+async def process_events(
+    db: AsyncSession, events: List[EventIn]
+) -> List[ProcessResult]:
     results = []
     for event in events:
         result = await process_event(db, event)
@@ -176,6 +222,7 @@ async def build_snapshot(db: AsyncSession, entity_id: str) -> Snapshot:
         beliefs[fact.attribute] = {
             "value": fact.value,
             "confidence": fact.confidence,
+            "source": fact.source,
             "source_event_id": fact.source_event_id,
             "fact_id": fact.fact_id,
         }
@@ -208,14 +255,26 @@ async def get_beliefs(db: AsyncSession, entity_id: str) -> Dict[str, Any]:
 
     entity_type = facts[0].entity_type if facts else "unknown"
     beliefs = {
-        fact.attribute: {"value": fact.value, "confidence": fact.confidence}
+        fact.attribute: {
+            "value": fact.value,
+            "confidence": fact.confidence,
+            "source": fact.source,
+        }
         for fact in facts
+        if fact.attribute not in SENSITIVE_ATTRIBUTES
     }
+
+    warnings = []
+    if any(fact.attribute in SENSITIVE_ATTRIBUTES for fact in facts):
+        warnings.append(
+            "Sensitive account-specific facts exist; use scoped endpoints to retrieve them."
+        )
 
     return {
         "entity_id": entity_id,
         "entity_type": entity_type,
         "beliefs": beliefs,
+        "warnings": warnings,
     }
 
 
@@ -231,7 +290,9 @@ async def detect_ambiguous_identities(db: AsyncSession) -> List[Dict[str, Any]]:
     value_to_entities: Dict[str, Dict[str, Any]] = {}
     for fact in facts:
         key = f"{fact.attribute}:{fact.value}"
-        value_to_entities.setdefault(key, {"attribute": fact.attribute, "value": fact.value, "entities": set()})
+        value_to_entities.setdefault(
+            key, {"attribute": fact.attribute, "value": fact.value, "entities": set()}
+        )
         value_to_entities[key]["entities"].add((fact.entity_type, fact.entity_id))
 
     ambiguities = []
@@ -252,29 +313,78 @@ async def detect_ambiguous_identities(db: AsyncSession) -> List[Dict[str, Any]]:
     return ambiguities
 
 
-async def get_conflicts(db: AsyncSession, entity_id: Optional[str] = None) -> List[Conflict]:
+async def get_conflicts(
+    db: AsyncSession, entity_id: Optional[str] = None, limit: int = 10
+) -> List[Conflict]:
     query = select(Conflict)
     if entity_id:
         query = query.where(Conflict.entity_id == entity_id)
-    result = await db.execute(query.order_by(Conflict.created_at.desc()))
+    result = await db.execute(query.order_by(Conflict.created_at.desc()).limit(limit))
     return list(result.scalars().all())
 
 
 async def get_facts(
-    db: AsyncSession, entity_id: Optional[str] = None, status: Optional[str] = None
+    db: AsyncSession,
+    entity_id: Optional[str] = None,
+    status: Optional[str] = None,
+    include_sensitive: bool = False,
 ) -> List[Fact]:
     query = select(Fact)
     if entity_id:
         query = query.where(Fact.entity_id == entity_id)
     if status:
         query = query.where(Fact.status == status)
+    if not include_sensitive:
+        query = query.where(Fact.attribute.not_in(SENSITIVE_ATTRIBUTES))
     result = await db.execute(query.order_by(Fact.created_at.desc()))
     return list(result.scalars().all())
 
 
-async def get_snapshots(db: AsyncSession, entity_id: Optional[str] = None) -> List[Snapshot]:
+async def get_snapshots(
+    db: AsyncSession, entity_id: Optional[str] = None
+) -> List[Snapshot]:
     query = select(Snapshot)
     if entity_id:
         query = query.where(Snapshot.entity_id == entity_id)
     result = await db.execute(query.order_by(Snapshot.created_at.desc()))
     return list(result.scalars().all())
+
+
+async def get_pre_call_briefing(db: AsyncSession, entity_id: str) -> Dict[str, Any]:
+    beliefs_result = await get_beliefs(db, entity_id)
+    beliefs = beliefs_result["beliefs"]
+
+    snapshots = await get_snapshots(db, entity_id)
+    latest_snapshot = snapshots[0] if snapshots else None
+
+    conflicts = await get_conflicts(db, entity_id, limit=5)
+    last_conflict_at = None
+    if conflicts:
+        last_conflict_at = conflicts[0].created_at.isoformat()
+
+    ambiguities = await detect_ambiguous_identities(db)
+    entity_ambiguities = [
+        a
+        for a in ambiguities
+        if any(e["entity_id"] == entity_id for e in a["entities"])
+    ]
+
+    warnings = list(beliefs_result.get("warnings", []))
+    if entity_ambiguities:
+        warnings.append(
+            "Identity attribute shared with other entities; do not auto-merge."
+        )
+
+    return {
+        "entity_id": entity_id,
+        "entity_type": beliefs_result["entity_type"],
+        "account_name": beliefs.get("account_name", {}).get("value"),
+        "active_plan": beliefs.get("plan", {}).get("value"),
+        "region": beliefs.get("region", {}).get("value"),
+        "tier": beliefs.get("tier", {}).get("value"),
+        "last_conflict_at": last_conflict_at,
+        "ambiguous_identities": entity_ambiguities,
+        "warnings": warnings,
+        "beliefs": beliefs,
+        "snapshot_id": latest_snapshot.snapshot_id if latest_snapshot else None,
+    }

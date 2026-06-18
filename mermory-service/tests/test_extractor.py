@@ -1,5 +1,3 @@
-import json
-
 import pytest
 
 from app.services.extractor import LLMFactExtractor, get_extractor
@@ -22,7 +20,13 @@ async def test_extractor_parses_json_response():
     extractor = LLMFactExtractor(api_key="test-key", model="test-model")
 
     class FakeChoice:
-        message = type("Message", (), {"content": '[{"attribute": "plan", "value": "Starter", "confidence": 0.9}]'})()
+        message = type(
+            "Message",
+            (),
+            {
+                "content": '[{"attribute": "plan", "value": "Starter", "confidence": 0.9}]'
+            },
+        )()
 
     class FakeCompletion:
         choices = [FakeChoice()]
@@ -30,13 +34,17 @@ async def test_extractor_parses_json_response():
     async def fake_create(*args, **kwargs):
         return FakeCompletion()
 
-    extractor._client = type("FakeClient", (), {
-        "chat": type("Chat", (), {
-            "completions": type("Completions", (), {
-                "create": fake_create
-            })()
-        })()
-    })()
+    extractor._client = type(
+        "FakeClient",
+        (),
+        {
+            "chat": type(
+                "Chat",
+                (),
+                {"completions": type("Completions", (), {"create": fake_create})()},
+            )()
+        },
+    )()
 
     facts = await extractor.extract_facts(
         entity_type="account",
@@ -56,7 +64,13 @@ async def test_extractor_strips_code_blocks():
     extractor = LLMFactExtractor(api_key="test-key")
 
     class FakeChoice:
-        message = type("Message", (), {"content": '```json\n[{"attribute": "region", "value": "Cairo", "confidence": 0.8}]\n```'})()
+        message = type(
+            "Message",
+            (),
+            {
+                "content": '```json\n[{"attribute": "region", "value": "Cairo", "confidence": 0.8}]\n```'
+            },
+        )()
 
     class FakeCompletion:
         choices = [FakeChoice()]
@@ -64,13 +78,17 @@ async def test_extractor_strips_code_blocks():
     async def fake_create(*args, **kwargs):
         return FakeCompletion()
 
-    extractor._client = type("FakeClient", (), {
-        "chat": type("Chat", (), {
-            "completions": type("Completions", (), {
-                "create": fake_create
-            })()
-        })()
-    })()
+    extractor._client = type(
+        "FakeClient",
+        (),
+        {
+            "chat": type(
+                "Chat",
+                (),
+                {"completions": type("Completions", (), {"create": fake_create})()},
+            )()
+        },
+    )()
 
     facts = await extractor.extract_facts(
         entity_type="account",
@@ -96,13 +114,17 @@ async def test_extractor_ignores_invalid_json():
     async def fake_create(*args, **kwargs):
         return FakeCompletion()
 
-    extractor._client = type("FakeClient", (), {
-        "chat": type("Chat", (), {
-            "completions": type("Completions", (), {
-                "create": fake_create
-            })()
-        })()
-    })()
+    extractor._client = type(
+        "FakeClient",
+        (),
+        {
+            "chat": type(
+                "Chat",
+                (),
+                {"completions": type("Completions", (), {"create": fake_create})()},
+            )()
+        },
+    )()
 
     facts = await extractor.extract_facts(
         entity_type="account",
@@ -118,7 +140,13 @@ async def test_extractor_skips_facts_missing_required_fields():
     extractor = LLMFactExtractor(api_key="test-key")
 
     class FakeChoice:
-        message = type("Message", (), {"content": '[{"attribute": "plan"}, {"attribute": "region", "value": "Cairo"}]'})()
+        message = type(
+            "Message",
+            (),
+            {
+                "content": '[{"attribute": "plan"}, {"attribute": "region", "value": "Cairo"}]'
+            },
+        )()
 
     class FakeCompletion:
         choices = [FakeChoice()]
@@ -126,13 +154,17 @@ async def test_extractor_skips_facts_missing_required_fields():
     async def fake_create(*args, **kwargs):
         return FakeCompletion()
 
-    extractor._client = type("FakeClient", (), {
-        "chat": type("Chat", (), {
-            "completions": type("Completions", (), {
-                "create": fake_create
-            })()
-        })()
-    })()
+    extractor._client = type(
+        "FakeClient",
+        (),
+        {
+            "chat": type(
+                "Chat",
+                (),
+                {"completions": type("Completions", (), {"create": fake_create})()},
+            )()
+        },
+    )()
 
     facts = await extractor.extract_facts(
         entity_type="account",

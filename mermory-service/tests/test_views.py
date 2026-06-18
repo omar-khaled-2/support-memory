@@ -115,6 +115,7 @@ async def test_read_conflicts_endpoint(client):
                 "event_id": "evt-2006",
                 "entity_type": "account",
                 "entity_id": "acct_api_6",
+                "source": "support",
                 "payload": {"region": "Cairo"},
                 "reliability": "high",
             },
@@ -122,6 +123,7 @@ async def test_read_conflicts_endpoint(client):
                 "event_id": "evt-2007",
                 "entity_type": "account",
                 "entity_id": "acct_api_6",
+                "source": "billing",
                 "payload": {"region": "Alexandria"},
                 "reliability": "high",
             },
@@ -131,6 +133,7 @@ async def test_read_conflicts_endpoint(client):
     assert response.status_code == 200
     data = response.json()
     assert len(data) == 1
+    assert "billing" in data[0]["description"]
 
 
 @pytest.mark.asyncio
@@ -142,6 +145,7 @@ async def test_read_ambiguities_endpoint(client):
                 "event_id": "evt-2008",
                 "entity_type": "account",
                 "entity_id": "acct_api_7",
+                "source": "crm",
                 "payload": {"email": "shared@example.com"},
                 "reliability": "high",
             },
@@ -149,6 +153,7 @@ async def test_read_ambiguities_endpoint(client):
                 "event_id": "evt-2009",
                 "entity_type": "account",
                 "entity_id": "acct_api_8",
+                "source": "crm",
                 "payload": {"email": "shared@example.com"},
                 "reliability": "high",
             },
@@ -159,3 +164,94 @@ async def test_read_ambiguities_endpoint(client):
     data = response.json()
     assert len(data) == 1
     assert data[0]["entity_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_read_briefing_endpoint(client):
+    await client.post(
+        "/api/v1/events/process",
+        json=[
+            {
+                "event_id": "evt-2010",
+                "entity_type": "account",
+                "entity_id": "acct_api_9",
+                "source": "billing",
+                "payload": {
+                    "account_name": "Helios Apps",
+                    "plan": "Enterprise",
+                    "region": "Berlin",
+                    "tier": "Platinum",
+                    "email": "shared@example.com",
+                },
+                "reliability": "high",
+            },
+            {
+                "event_id": "evt-2011",
+                "entity_type": "account",
+                "entity_id": "acct_api_10",
+                "source": "crm",
+                "payload": {"email": "shared@example.com"},
+                "reliability": "high",
+            },
+        ],
+    )
+    response = await client.get("/api/v1/entities/acct_api_9/briefing")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["entity_id"] == "acct_api_9"
+    assert data["account_name"] == "Helios Apps"
+    assert data["active_plan"] == "Enterprise"
+    assert len(data["ambiguous_identities"]) == 1
+    assert any("do not auto-merge" in w for w in data["warnings"])
+
+
+@pytest.mark.asyncio
+async def test_sensitive_facts_hidden_from_facts_endpoint(client):
+    await client.post(
+        "/api/v1/events/process",
+        json=[
+            {
+                "event_id": "evt-2012",
+                "entity_type": "account",
+                "entity_id": "acct_api_11",
+                "source": "billing",
+                "payload": {"sla": "platinum", "plan": "Pro"},
+                "reliability": "high",
+            }
+        ],
+    )
+    response = await client.get("/api/v1/facts?entity_id=acct_api_11")
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 1
+    assert data[0]["attribute"] == "plan"
+
+
+@pytest.mark.asyncio
+async def test_beliefs_endpoint_warns_about_ambiguity(client):
+    await client.post(
+        "/api/v1/events/process",
+        json=[
+            {
+                "event_id": "evt-2013",
+                "entity_type": "account",
+                "entity_id": "acct_api_12",
+                "source": "crm",
+                "payload": {"email": "dup@example.com"},
+                "reliability": "high",
+            },
+            {
+                "event_id": "evt-2014",
+                "entity_type": "account",
+                "entity_id": "acct_api_13",
+                "source": "crm",
+                "payload": {"email": "dup@example.com"},
+                "reliability": "high",
+            },
+        ],
+    )
+    response = await client.get("/api/v1/entities/acct_api_12/beliefs")
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data["ambiguous_identities"]) == 1
+    assert any("do not auto-merge" in w for w in data["warnings"])

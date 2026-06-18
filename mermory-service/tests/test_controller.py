@@ -1,14 +1,17 @@
 import pytest
 
 from app.controllers.memory_controller import (
+    SENSITIVE_ATTRIBUTES,
     _extract_facts_from_event,
     _extract_facts_from_payload,
     _reliability_to_confidence,
+    _source_weight,
     build_snapshot,
     detect_ambiguous_identities,
     get_beliefs,
     get_conflicts,
     get_facts,
+    get_pre_call_briefing,
     process_event,
 )
 from app.schemas.memory import EventIn
@@ -19,6 +22,11 @@ def test_reliability_to_confidence():
     assert _reliability_to_confidence("medium") == 0.75
     assert _reliability_to_confidence("low") == 0.5
     assert _reliability_to_confidence("unknown") == 0.75
+
+
+def test_source_weight_defaults():
+    assert _source_weight("billing") > _source_weight("chat")
+    assert _source_weight("unknown") == 0
 
 
 def test_extract_facts_from_payload():
@@ -58,6 +66,7 @@ async def test_process_event_extracts_facts(db_session):
         entity_id="acct_helios_269",
         payload={"plan": "Starter"},
         reliability="high",
+        source="crm",
     )
     result = await process_event(db_session, event)
     assert result.event_id == "evt-1001"
@@ -70,6 +79,7 @@ async def test_process_event_extracts_facts(db_session):
     assert facts[0].attribute == "plan"
     assert facts[0].value == "Starter"
     assert facts[0].status == "active"
+    assert facts[0].source == "crm"
 
 
 @pytest.mark.asyncio
@@ -80,6 +90,7 @@ async def test_process_event_detects_contradiction(db_session):
         entity_id="acct_1",
         payload={"region": "Cairo"},
         reliability="high",
+        source="support",
     )
     event2 = EventIn(
         event_id="evt-1002",
@@ -87,21 +98,48 @@ async def test_process_event_detects_contradiction(db_session):
         entity_id="acct_1",
         payload={"region": "Alexandria"},
         reliability="high",
+        source="billing",
+    )
+    await process_event(db_session, event1)
+    result = await process_event(db_session, event2)
+
+    assert result.conflicts_detected == 0
+
+    facts = await get_facts(db_session, entity_id="acct_1")
+    assert any(f.status == "superseded" and f.value == "Cairo" for f in facts)
+    assert any(f.status == "active" and f.value == "Alexandria" for f in facts)
+
+    conflicts = await get_conflicts(db_session, entity_id="acct_1")
+    assert len(conflicts) == 1
+    assert "billing" in conflicts[0].description
+
+
+@pytest.mark.asyncio
+async def test_process_event_retains_higher_authority_fact(db_session):
+    event1 = EventIn(
+        event_id="evt-1001",
+        entity_type="account",
+        entity_id="acct_retained",
+        payload={"plan": "Enterprise"},
+        reliability="high",
+        source="billing",
+    )
+    event2 = EventIn(
+        event_id="evt-1002",
+        entity_type="account",
+        entity_id="acct_retained",
+        payload={"plan": "Starter"},
+        reliability="high",
+        source="chat",
     )
     await process_event(db_session, event1)
     result = await process_event(db_session, event2)
 
     assert result.conflicts_detected == 1
 
-    facts = await get_facts(db_session, entity_id="acct_1")
-    assert len(facts) == 2
-    assert any(f.status == "superseded" for f in facts)
-    assert any(f.status == "active" and f.value == "Alexandria" for f in facts)
-
-    conflicts = await get_conflicts(db_session, entity_id="acct_1")
-    assert len(conflicts) == 1
-    assert "Cairo" in conflicts[0].description
-    assert "Alexandria" in conflicts[0].description
+    facts = await get_facts(db_session, entity_id="acct_retained")
+    assert any(f.status == "active" and f.value == "Enterprise" for f in facts)
+    assert not any(f.value == "Starter" for f in facts)
 
 
 @pytest.mark.asyncio
@@ -112,6 +150,7 @@ async def test_build_snapshot_aggregates_active_facts(db_session):
         entity_id="acct_2",
         payload={"plan": "Pro", "region": "Berlin"},
         reliability="medium",
+        source="crm",
     )
     await process_event(db_session, event)
     snapshot = await build_snapshot(db_session, "acct_2")
@@ -129,6 +168,7 @@ async def test_get_beliefs_returns_active_facts(db_session):
         entity_id="acct_3",
         payload={"plan": "Enterprise"},
         reliability="high",
+        source="billing",
     )
     await process_event(db_session, event)
     beliefs = await get_beliefs(db_session, "acct_3")
@@ -137,6 +177,43 @@ async def test_get_beliefs_returns_active_facts(db_session):
     assert beliefs["entity_type"] == "account"
     assert beliefs["beliefs"]["plan"]["value"] == "Enterprise"
     assert beliefs["beliefs"]["plan"]["confidence"] == 1.0
+    assert beliefs["beliefs"]["plan"]["source"] == "billing"
+
+
+@pytest.mark.asyncio
+async def test_sensitive_attributes_hidden_by_default(db_session):
+    event = EventIn(
+        event_id="evt-sens",
+        entity_type="account",
+        entity_id="acct_sensitive",
+        payload={"sla": "platinum", "plan": "Pro"},
+        reliability="high",
+        source="billing",
+    )
+    await process_event(db_session, event)
+    facts = await get_facts(db_session, entity_id="acct_sensitive")
+    assert {f.attribute for f in facts} == {"plan"}
+
+    beliefs = await get_beliefs(db_session, "acct_sensitive")
+    assert "sla" not in beliefs["beliefs"]
+    assert "Sensitive account-specific facts exist" in beliefs["warnings"][0]
+
+
+@pytest.mark.asyncio
+async def test_sensitive_attributes_visible_when_scoped(db_session):
+    event = EventIn(
+        event_id="evt-sens-scoped",
+        entity_type="account",
+        entity_id="acct_sensitive_scoped",
+        payload={"sla": "platinum", "plan": "Pro"},
+        reliability="high",
+        source="billing",
+    )
+    await process_event(db_session, event)
+    facts = await get_facts(
+        db_session, entity_id="acct_sensitive_scoped", include_sensitive=True
+    )
+    assert {f.attribute for f in facts} == {"plan", "sla"}
 
 
 @pytest.mark.asyncio
@@ -147,6 +224,7 @@ async def test_detect_ambiguous_identities(db_session):
         entity_id="acct_a",
         payload={"email": "user@example.com"},
         reliability="high",
+        source="crm",
     )
     event2 = EventIn(
         event_id="evt-1006",
@@ -154,6 +232,7 @@ async def test_detect_ambiguous_identities(db_session):
         entity_id="acct_b",
         payload={"email": "user@example.com"},
         reliability="high",
+        source="crm",
     )
     await process_event(db_session, event1)
     await process_event(db_session, event2)
@@ -178,6 +257,7 @@ async def test_process_event_no_payload_creates_empty_snapshot(db_session):
         entity_id="acct_4",
         payload={},
         reliability="low",
+        source="chat",
     )
     result = await process_event(db_session, event)
     assert result.facts_extracted == 0
@@ -192,6 +272,7 @@ async def test_get_facts_filter_by_status(db_session):
         entity_id="acct_5",
         payload={"region": "Cairo"},
         reliability="high",
+        source="chat",
     )
     event2 = EventIn(
         event_id="evt-1009",
@@ -199,6 +280,7 @@ async def test_get_facts_filter_by_status(db_session):
         entity_id="acct_5",
         payload={"region": "Alexandria"},
         reliability="high",
+        source="billing",
     )
     await process_event(db_session, event1)
     await process_event(db_session, event2)
@@ -207,3 +289,48 @@ async def test_get_facts_filter_by_status(db_session):
     superseded = await get_facts(db_session, entity_id="acct_5", status="superseded")
     assert len(active) == 1
     assert len(superseded) == 1
+
+
+@pytest.mark.asyncio
+async def test_pre_call_briefing(db_session):
+    event = EventIn(
+        event_id="evt-brief",
+        entity_type="account",
+        entity_id="acct_brief",
+        payload={
+            "account_name": "Helios Apps",
+            "plan": "Enterprise",
+            "region": "Berlin",
+            "tier": "Platinum",
+            "email": "shared@example.com",
+        },
+        reliability="high",
+        source="billing",
+    )
+    await process_event(db_session, event)
+
+    event2 = EventIn(
+        event_id="evt-brief-2",
+        entity_type="account",
+        entity_id="acct_brief_2",
+        payload={"email": "shared@example.com"},
+        reliability="high",
+        source="crm",
+    )
+    await process_event(db_session, event2)
+
+    briefing = await get_pre_call_briefing(db_session, "acct_brief")
+    assert briefing["entity_id"] == "acct_brief"
+    assert briefing["account_name"] == "Helios Apps"
+    assert briefing["active_plan"] == "Enterprise"
+    assert briefing["region"] == "Berlin"
+    assert briefing["tier"] == "Platinum"
+    assert len(briefing["ambiguous_identities"]) == 1
+    assert any("do not auto-merge" in w for w in briefing["warnings"])
+
+
+@pytest.mark.asyncio
+async def test_sensitive_attributes_constant_covers_expected_values():
+    assert "sla" in SENSITIVE_ATTRIBUTES
+    assert "entitlement" in SENSITIVE_ATTRIBUTES
+    assert "internal_notes" in SENSITIVE_ATTRIBUTES

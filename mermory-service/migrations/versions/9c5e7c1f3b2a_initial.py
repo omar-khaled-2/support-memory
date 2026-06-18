@@ -25,6 +25,7 @@ def upgrade() -> None:
         sa.Column("attribute", sa.String(), nullable=False),
         sa.Column("value", sa.Text(), nullable=False),
         sa.Column("source_event_id", sa.String(), nullable=False),
+        sa.Column("source", sa.String(), nullable=False),
         sa.Column("confidence", sa.Float(), nullable=False),
         sa.Column("status", sa.String(), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),

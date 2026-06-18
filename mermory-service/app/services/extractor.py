@@ -35,7 +35,9 @@ class LLMFactExtractor:
         settings = get_settings()
         self.api_key = api_key or settings.openai_api_key
         self.model = model or settings.openai_model
-        self.temperature = temperature if temperature is not None else settings.openai_temperature
+        self.temperature = (
+            temperature if temperature is not None else settings.openai_temperature
+        )
         self._client: Optional[AsyncOpenAI] = None
 
     @property
@@ -65,7 +67,10 @@ class LLMFactExtractor:
             model=self.model,
             temperature=self.temperature,
             messages=[
-                {"role": "system", "content": "You are a precise fact extraction assistant."},
+                {
+                    "role": "system",
+                    "content": "You are a precise fact extraction assistant.",
+                },
                 {"role": "user", "content": prompt},
             ],
         )
